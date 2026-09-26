@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) · **English**
 
-A collection of education skills that turn academic problems into **interactive lesson web pages**.
+A collection of education skills that turn academic problems into **interactive lesson web pages** and **narrated explainer videos**.
 
 ## Install
 
@@ -132,6 +132,41 @@ python3 lib/reaction_kernel.py                              # kernel built-in se
 
 > Like above, no output path → writes to the **current working directory (cwd)**.
 
+## Skill: edu-math-video
+
+![edu-math-video demo](edu-math-video.png)
+
+Turns one math problem (geometry, algebra, functions, motion problems…) into a **16:9 1920×1080 explainer MP4**: Chinese voice-over (Zhipu **GLM-TTS**), bilingual zh + en subtitles (`.srt` too), and hand-drawn notebook-style canvas animation driven by the narration timeline. Input is a problem screenshot or plain text.
+
+**The picture explains the step**: every narration line gets a "point → move → keep" action on the figure (equal segments slide onto each other, congruent triangles overlay, the 3D camera tweens to a top view, a cone unrolls into a sector…) — timed by `S.at(k, f)` (a fraction into line *k*), never by hard-coded seconds. A `motion` check rejects static lines.
+
+**Pipeline** (one folder per video, created in the user's current directory):
+
+```
+script.json ──build_audio.py──► timeline.json + mix.wav + <name>.srt   (GLM-TTS + synthesized music)
+anim.js + engine.js ──node render.mjs video──► <name>.mp4              (Playwright + ffmpeg, 30 fps)
+```
+
+**Guard rails**: the first scene shows the original problem with each condition boxed as it is read; `tts` text must be speakable Chinese (no digits / math symbols); polyphones are pinned (`长[cháng]`, shared `pron.json` lexicon) and `--check` must report 0 before any paid TTS call; a free `--preview` + contact-sheet review comes before real audio; `--asr` transcribes the audio back to catch misread letters.
+
+**Trigger words**: math explainer video, walkthrough video, problem-solving video, micro-lesson; 讲解视频、解题视频、例题精讲、微课 etc.
+
+### Dependency
+
+- Python 3 with `numpy requests pypinyin pillow`; Node.js 18+ with `playwright` + `ffmpeg-static` (installed once in the workspace — `scripts/new_video.sh` writes the `package.json`); Google Chrome or Playwright Chromium.
+- A Zhipu **`GLM_API_KEY`** provided by you, in `~/.config/math-problem-video/.env` (see `reference/glm-tts-setup.md`).
+
+### Run the pipeline by hand (without Claude)
+
+```bash
+bash skills/edu-math-video/scripts/new_video.sh "$PWD" my_problem   # scaffold from template/
+bash skills/edu-math-video/scripts/setup_check.sh my_problem        # must print ALL OK
+cd my_problem
+python3 build_audio.py --check                                      # script + pronunciation lint (free)
+python3 build_audio.py --preview && node render.mjs motion && node render.mjs stills auto
+python3 build_audio.py && node render.mjs video 6                   # real TTS, then render (6 = parallel pages)
+```
+
 ## How it works
 
 1. **Get a problem spec** — normalize all three entry points into a structured description (body type and dimensions, given conditions, the quantity asked, language).
@@ -167,15 +202,22 @@ edulab/
     │   ├── scripts/generate.py
     │   ├── output/
     │   └── references/          # problem-schema.md · conventions.md
-    └── edu-chem-reaction/       # chemistry reactions — 3D (Three.js) + KaTeX
+    ├── edu-chem-reaction/       # chemistry reactions — 3D (Three.js) + KaTeX
+    │   ├── SKILL.md
+    │   ├── template/reaction.html # data-driven template (unified renderer + dual engine + data island)
+    │   ├── lib/
+    │   │   ├── reaction_kernel.py  # sympy balancing + conservation/atom-map check + bond-diff + assembly
+    │   │   └── molecules.py        # VSEPR molecule-geometry library
+    │   ├── scripts/generate.py
+    │   ├── output/
+    │   └── references/          # problem-schema.md · conventions.md
+    └── edu-math-video/          # math explainer videos — GLM-TTS + canvas animation → MP4
         ├── SKILL.md
-        ├── template/reaction.html # data-driven template (unified renderer + dual engine + data island)
-        ├── lib/
-        │   ├── reaction_kernel.py  # sympy balancing + conservation/atom-map check + bond-diff + assembly
-        │   └── molecules.py        # VSEPR molecule-geometry library
-        ├── scripts/generate.py
-        ├── output/
-        └── references/          # problem-schema.md · conventions.md
+        ├── template/            # runnable sample project (engine.js · anim.js · build_audio.py · render.mjs)
+        ├── shared/              # pron.py + pron.json — shared pronunciation lexicon
+        ├── scripts/             # new_video.sh · setup_check.sh · problem image & contact-sheet tools
+        ├── examples/cone-parallel/  # solid-geometry example (camera tween · cone unrolling)
+        └── reference/           # TTS setup · script writing · pronunciation · visual design · animation API
 ```
 
 ## Extending
@@ -191,6 +233,10 @@ edulab/
 **edu-chem-reaction**
 - **Add a reaction**: add a `build_*` in `generate.py` (high-level `species + atom_map`, or low-level `atoms + fragments` for mechanisms) and register it in `REGISTRY`.
 - **Add a molecule / ion**: add an entry in `lib/molecules.py` (VSEPR geometry + display metadata + internal bonds).
+
+**edu-math-video**
+- **New problem**: never edit `engine.js`; write the per-problem `script.json` / `storyboard.md` / `anim.js`, and add new figure helpers inside `anim.js`.
+- **Fix a reading**: add the word to `shared/pron.json` (`words` / `ok`) — one lexicon shared by every video.
 
 ## License
 

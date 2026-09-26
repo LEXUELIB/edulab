@@ -2,7 +2,7 @@
 
 **简体中文** · [English](README.md)
 
-教育类技能集合：把学科问题转成**可交互的教学网页**。
+教育类技能集合：把学科问题转成**可交互的教学网页**和**带配音的讲解视频**。
 
 ## 安装
 
@@ -132,6 +132,41 @@ python3 lib/reaction_kernel.py                              # kernel 内置自�
 
 > 同上，不传输出路径时默认写到**当前工作目录（cwd）**。
 
+## 技能：edu-math-video
+
+![edu-math-video 演示](edu-math-video.png)
+
+把一道数学题（几何、代数、函数、行程问题……）做成 **16:9、1920×1080 的讲解视频 MP4**：智谱 **GLM-TTS** 中文配音、中英双语字幕（同时输出 `.srt`）、按旁白时间轴驱动的手绘笔记本风格 canvas 动画。输入可以是题目截图或文字。
+
+**图会"讲题"**：每句旁白在图上都有一个"指 → 动 → 留"的动作（相等线段滑过去重合、全等三角形叠上去、3D 相机转到俯视、圆锥侧面展开成扇形……），用 `S.at(k, f)`（第 k 句开始后 f 比例处）定时，绝不写死秒数；`motion` 检查会拦下静止不动的句子。
+
+**流水线**（每个视频一个文件夹，建在用户当前目录）：
+
+```
+script.json ──build_audio.py──► timeline.json + mix.wav + <name>.srt   （GLM-TTS + 合成音乐）
+anim.js + engine.js ──node render.mjs video──► <name>.mp4              （Playwright + ffmpeg，30 fps）
+```
+
+**护栏**：第一幕展示原题并逐条框出条件；`tts` 字段只能是能念出来的中文（无数字/数学符号）；多音字必须固定读音（`长[cháng]`，共享 `pron.json` 词表），`--check` 为 0 才允许调用付费 TTS；先免费 `--preview` + 截图拼图审查版面，再生成真配音；`--asr` 把配音转回文字核对字母读音。
+
+**触发词**：讲解视频、解题视频、例题精讲、微课、数学题视频；math explainer video、walkthrough video 等。
+
+### 依赖
+
+- Python 3 + `numpy requests pypinyin pillow`；Node.js 18+ + `playwright` + `ffmpeg-static`（在工作目录装一次，`scripts/new_video.sh` 会生成 `package.json`）；Google Chrome 或 Playwright Chromium。
+- 由你自己提供的智谱 **`GLM_API_KEY`**，写在 `~/.config/math-problem-video/.env`（见 `reference/glm-tts-setup.md`）。
+
+### 手动跑流水线（不经过 Claude）
+
+```bash
+bash skills/edu-math-video/scripts/new_video.sh "$PWD" my_problem   # 从 template/ 建项目
+bash skills/edu-math-video/scripts/setup_check.sh my_problem        # 必须输出 ALL OK
+cd my_problem
+python3 build_audio.py --check                                      # 脚本 + 读音检查（免费）
+python3 build_audio.py --preview && node render.mjs motion && node render.mjs stills auto
+python3 build_audio.py && node render.mjs video 6                   # 真配音，然后渲染（6 = 并行页数）
+```
+
 ## 工作原理
 
 1. **得到 problem spec** —— 三入口归一成结构化描述（几何体类型与尺寸、已知条件、所求、语言）。
@@ -167,15 +202,22 @@ edulab/
     │   ├── scripts/generate.py
     │   ├── output/
     │   └── references/          # problem-schema.md · conventions.md
-    └── edu-chem-reaction/       # 化学反应 — 3D（Three.js）+ KaTeX
+    ├── edu-chem-reaction/       # 化学反应 — 3D（Three.js）+ KaTeX
+    │   ├── SKILL.md
+    │   ├── template/reaction.html # 数据驱动模板（统一渲染器 + 双引擎 + 数据岛）
+    │   ├── lib/
+    │   │   ├── reaction_kernel.py  # sympy 配平 + 守恒/原子映射校验 + 键差 + 装配
+    │   │   └── molecules.py        # VSEPR 分子几何库
+    │   ├── scripts/generate.py
+    │   ├── output/
+    │   └── references/          # problem-schema.md · conventions.md
+    └── edu-math-video/          # 数学题讲解视频 — GLM-TTS + canvas 动画 → MP4
         ├── SKILL.md
-        ├── template/reaction.html # 数据驱动模板（统一渲染器 + 双引擎 + 数据岛）
-        ├── lib/
-        │   ├── reaction_kernel.py  # sympy 配平 + 守恒/原子映射校验 + 键差 + 装配
-        │   └── molecules.py        # VSEPR 分子几何库
-        ├── scripts/generate.py
-        ├── output/
-        └── references/          # problem-schema.md · conventions.md
+        ├── template/            # 可直接运行的示例项目（engine.js · anim.js · build_audio.py · render.mjs）
+        ├── shared/              # pron.py + pron.json —— 共享读音词表
+        ├── scripts/             # new_video.sh · setup_check.sh · 题目图片与截图拼图工具
+        ├── examples/cone-parallel/  # 立体几何示例（相机转俯视 · 圆锥展开）
+        └── reference/           # TTS 配置 · 脚本写法 · 读音 · 画面设计 · 动画 API
 ```
 
 ## 扩展
@@ -191,6 +233,10 @@ edulab/
 **edu-chem-reaction**
 - **加反应**：在 `generate.py` 加一个 `build_*`（高层 `species + atom_map`，或低层 `atoms + fragments` 用于机理），注册进 `REGISTRY`。
 - **加分子 / 离子**：在 `lib/molecules.py` 加一项（VSEPR 几何 + 显示元数据 + 内部键）。
+
+**edu-math-video**
+- **做新题**：不改 `engine.js`；每道题重写 `script.json` / `storyboard.md` / `anim.js`，新图形函数写在 `anim.js` 里。
+- **修读音**：把词加进 `shared/pron.json`（`words` / `ok`），所有视频共用一份词表。
 
 ## License
 
