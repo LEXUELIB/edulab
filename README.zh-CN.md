@@ -155,6 +155,7 @@ anim.js + engine.js ──node render.mjs video──► <name>.mp4             
 
 - Python 3 + `numpy requests pypinyin pillow`；Node.js 18+ + `playwright` + `ffmpeg-static`（在工作目录装一次，`scripts/new_video.sh` 会生成 `package.json`）；Google Chrome 或 Playwright Chromium。
 - 由你自己提供的智谱 **`GLM_API_KEY`**，写在 `~/.config/math-problem-video/.env`（见 `reference/glm-tts-setup.md`）。
+- **没有 key？** 自动兜底（`TTS_ENGINE=auto`）：装了 [edge-tts](https://github.com/rany2/edge-tts) 就用它（免费神经网络音色，需联网），否则用 macOS 自带的 `say`（离线，机械感明显）。也可用 `TTS_ENGINE=glm|edge|say` 指定。
 
 ### 手动跑流水线（不经过 Claude）
 

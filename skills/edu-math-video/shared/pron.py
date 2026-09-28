@@ -3,12 +3,19 @@
 Readings are pinned by swapping a character for a common, single-reading homophone with the same tone
 (汞 gǒng -> 拱) in the text that is sent to TTS only; subtitles keep the original characters.
 
+A swap costs prosody: the TTS front-end segments words to decide where to phrase, and 直搅三搅形 / 蛋气、养气 are
+not words, so it inserts extra breaks and slows down (measured: 4 pauses vs 2 on the same sentence). So a
+lexicon entry is only swapped where the TTS would plausibly misread it (see needs_swap); inline markup,
+rare characters and the "always" list are always swapped.
+
   * inline markup, in `zh` or `tts`:   汞[gǒng]   重[chóng]复   长[zhang3]
   * global lexicon in pron.json:       "words": {"氩": "yà", "分子": "fēn _"}  (applied everywhere unless marked;
                                        '_' keeps that character), "ok": ["空气"] = reviewed, TTS default is right
+                                       "always": "汞氦…" = characters swapped even when context reads them right
   * lint():  flags rare characters and polyphones that nothing pins down, with the reading TTS would likely guess
   * letter runs: GLM-TTS reads adjacent Latin letters as one syllable ("CO" -> kǒu, "ACBE" drops the E), so to_tts()
-    always spaces them out ("C O", "A C B E"): checked with ASR, spaced letters come out one by one with no extra pause
+    always spaces them out ("C O", "A C B E"): checked with ASR (read one by one) and by measuring silences in the
+    audio (no extra pause); unspaced "PAB" is heard as 派
 """
 import json, os, re
 from pypinyin import pinyin, Style
@@ -20,6 +27,7 @@ WORDS = _CFG.get("words", {})
 HOMO = {}
 WATCH = set(_CFG.get("watch", ""))  # everyday polyphones that TTS does get wrong
 OK = _CFG.get("ok", [])  # words whose default reading was checked by hand: not reported, not rewritten
+ALWAYS = set(_CFG.get("always", ""))  # heard misread by GLM-TTS even in a clear context: always swap
 MARK = re.compile(r"(\S)\[([a-zA-Zāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜüv:]+[1-5]?)\]")
 HAN = re.compile(r"[一-鿿]")
 LETTER_RUN = re.compile(r"[A-Za-z]{2,}")  # point names like AB, ACBE: must be spelled letter by letter
@@ -87,8 +95,37 @@ def pin(ch, py):
     return homophone(t3(py))
 
 
-def to_tts(text):
-    """Apply markup + lexicon. Returns (tts_text, notes[(orig, reading, sent)])."""
+def _same(a, b):
+    """Readings equal, treating a neutral tone as matching any tone of the same syllable (的 de5 ~ de2)."""
+    return a == b or (a[:-1] == b[:-1] and "5" in (a[-1], b[-1]))
+
+
+def ctx_reading(s, j):
+    """Reading of s[j] guessed from its word context (pypinyin phrase dictionary), skipping \0 sentinels.
+    A TTS front-end resolves polyphones with the same kind of dictionary, so where this is right, it is too."""
+    ok = lambda c: c == "\0" or HAN.match(c)  # noqa: E731
+    lo, hi = j, j + 1
+    while lo > 0 and ok(s[lo - 1]):
+        lo -= 1
+    while hi < len(s) and ok(s[hi]):
+        hi += 1
+    keep = [k for k in range(lo, hi) if s[k] != "\0"]
+    pys = pinyin("".join(s[k] for k in keep), style=Style.TONE3, neutral_tone_with_five=True)
+    return t3(pys[keep.index(j)][0])
+
+
+def needs_swap(s, j, py):
+    """Swap s[j] only if the TTS might get it wrong: rare, on the always-list, or context says otherwise."""
+    ch = s[j]
+    return ch in ALWAYS or not common(ch) or not _same(ctx_reading(s, j), t3(py))
+
+
+def to_tts(text, sep=" "):
+    """Apply markup + lexicon. Returns (tts_text, notes[(orig, reading, sent)]).
+    Inline markup is always applied; lexicon entries only where needs_swap() (a word the TTS already reads
+    right is sent unchanged, which keeps its phrasing natural).
+    sep: what goes between spelled-out letters. " " for GLM-TTS; macOS `say` (Tingting) swallows spaced letters
+    and only reads them one by one with "、" (ASR-checked)."""
     notes = []
 
     def mark(m):
@@ -105,15 +142,17 @@ def to_tts(text):
             if i > 0 and s[i - 1] == "\0":
                 i += 1
                 continue
-            rep = "".join(c if p == "_" else pin(c, p) for c, p in zip(w, pys))  # '_' = leave this character alone
+            # '_' = leave this character alone; otherwise swap only where the TTS could misread it
+            rep = "".join(pin(c, p) if p != "_" and needs_swap(s, i + k, p) else c
+                          for k, (c, p) in enumerate(zip(w, pys)))
             if rep != w:
                 notes.append((w, " ".join(p if p == "_" else t3(p) for p in pys), rep))
             s = s[:i] + "".join("\0" + c for c in rep) + s[i + len(w):]
             i += 2 * len(rep)
     s = s.replace("\0", "")
     for m in LETTER_RUN.findall(s):
-        notes.append((m, "逐个字母", " ".join(m)))
-    return LETTER_RUN.sub(lambda m: " ".join(m.group(0)), s), notes
+        notes.append((m, "逐个字母", sep.join(m)))
+    return LETTER_RUN.sub(lambda m: sep.join(m.group(0)), s), notes
 
 
 def lint(text):

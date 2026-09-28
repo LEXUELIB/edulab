@@ -155,6 +155,7 @@ anim.js + engine.js ──node render.mjs video──► <name>.mp4             
 
 - Python 3 with `numpy requests pypinyin pillow`; Node.js 18+ with `playwright` + `ffmpeg-static` (installed once in the workspace — `scripts/new_video.sh` writes the `package.json`); Google Chrome or Playwright Chromium.
 - A Zhipu **`GLM_API_KEY`** provided by you, in `~/.config/math-problem-video/.env` (see `reference/glm-tts-setup.md`).
+- **No key?** It falls back automatically (`TTS_ENGINE=auto`): [edge-tts](https://github.com/rany2/edge-tts) if installed (free neural voices, needs internet), else macOS `say` (offline, robotic). Force one with `TTS_ENGINE=glm|edge|say`.
 
 ### Run the pipeline by hand (without Claude)
 

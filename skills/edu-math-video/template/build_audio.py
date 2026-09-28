@@ -15,6 +15,13 @@
 PY = a python3 that has numpy, requests, pypinyin (on macOS usually /usr/bin/python3).
 GLM_API_KEY / GLM_VOICE come from the environment, the nearest .env above this folder, or
 ~/.config/math-problem-video/.env (user-level, shared by all workspaces).
+
+TTS engine (TTS_ENGINE=auto|glm|edge|say, default auto = the first one available, in this order):
+  glm   GLM-TTS, needs GLM_API_KEY. Best quality; the only engine with --asr checking.
+  edge  fallback: Microsoft Edge neural voices via `pip install edge-tts`, free, no key, needs internet
+        (EDGE_VOICE, default zh-CN-XiaoxiaoNeural)
+  say   last resort: macOS built-in `say`, offline, robotic (SAY_VOICE, default Tingting: the other zh voices
+        cannot read Latin letters)
 """
 import hashlib, json, os, re, shutil, struct, subprocess, sys, wave
 from concurrent.futures import ThreadPoolExecutor
@@ -72,7 +79,7 @@ def load_env():
             if "=" in line and not line.lstrip().startswith("#"):
                 k, v = line.strip().split("=", 1)
                 env[k.strip()] = v.strip().strip("\"'")
-    for key in ("GLM_API_KEY", "GLM_VOICE", "GLM_SPEED"):
+    for key in ("GLM_API_KEY", "GLM_VOICE", "GLM_SPEED", "TTS_ENGINE", "EDGE_VOICE", "SAY_VOICE"):
         if os.environ.get(key):
             env[key] = os.environ[key]
     return env
@@ -80,8 +87,38 @@ def load_env():
 
 ENV = load_env()
 VOICES = ("tongtong", "chuichui", "xiaochen", "jam", "kazi", "douji", "luodo")
-VOICE = ENV.get("GLM_VOICE", "tongtong")
 SPEED = float(ENV.get("GLM_SPEED", "1.05"))
+
+
+def _has_edge():
+    try:
+        import edge_tts  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def pick_engine():
+    want = ENV.get("TTS_ENGINE", "auto").lower()
+    if want != "auto":
+        return want
+    if ENV.get("GLM_API_KEY"):
+        return "glm"
+    if _has_edge():
+        return "edge"
+    if shutil.which("say"):
+        return "say"
+    return "glm"  # nothing available: need_key() explains what to set up
+
+
+ENGINE = pick_engine()
+# VOICE also keys the TTS cache, so each engine gets its own clips (GLM keeps the plain voice name: old caches stay valid)
+VOICE = {"glm": ENV.get("GLM_VOICE", "chuichui"),
+         "edge": "edge:" + ENV.get("EDGE_VOICE", "zh-CN-XiaoxiaoNeural"),
+         "say": "say:" + ENV.get("SAY_VOICE", "Tingting")}.get(ENGINE)
+if VOICE is None:
+    raise SystemExit(f"TTS_ENGINE={ENGINE!r}: use auto, glm, edge or say")
+LETTER_SEP = "、" if ENGINE == "say" else " "  # see pron.to_tts
 EPISODE = json.load(open(os.path.join(ROOT, "episode.json"), encoding="utf-8"))
 OUT_NAME = EPISODE["output_name"]
 POP_SCENES = set(EPISODE.get("pop_scenes", []))  # scenes whose lines each get a soft "pop" SFX
@@ -104,9 +141,41 @@ def strip_wav(raw: bytes) -> bytes:
     return b"RIFF" + struct.pack("<I", 4 + len(body)) + b"WAVE" + body
 
 
+def _to_wav(src, out):
+    """Any audio file -> 48 kHz mono wav without metadata."""
+    subprocess.run([FF, "-y", "-loglevel", "error", "-i", src, "-map_metadata", "-1",
+                    "-fflags", "+bitexact", "-ar", str(SR), "-ac", "1", out], check=True)
+    os.remove(src)
+
+
+def tts_edge(text, out):
+    import asyncio
+    import edge_tts
+    tmp = out + ".mp3"
+    rate = f"{round((SPEED - 1) * 100):+d}%"
+    for attempt in range(3):
+        try:
+            asyncio.run(edge_tts.Communicate(text, VOICE.split(":", 1)[1], rate=rate).save(tmp))
+            return _to_wav(tmp, out)
+        except Exception as e:  # network hiccups: the service is free but unofficial
+            print("edge-tts retry", attempt, e, file=sys.stderr)
+    raise RuntimeError(f"edge-tts failed  text: {text}")
+
+
+def tts_say(text, out):
+    tmp = out + ".aiff"
+    # `say` rate is words per minute; ~190 matches GLM's pace for Chinese at speed 1.0
+    subprocess.run(["say", "-v", VOICE.split(":", 1)[1], "-r", str(round(190 * SPEED)), "-o", tmp, text], check=True)
+    _to_wav(tmp, out)
+
+
 def tts(text: str, out: str):
     if os.path.exists(out):
         return
+    if ENGINE == "edge":
+        return tts_edge(text, out)
+    if ENGINE == "say":
+        return tts_say(text, out)
     for attempt in range(4):
         r = requests.post(
             "https://open.bigmodel.cn/api/paas/v4/audio/speech",
@@ -118,11 +187,7 @@ def tts(text: str, out: str):
         if r.status_code == 200 and r.content[:4] == b"RIFF":
             tmp = out + ".raw.wav"
             open(tmp, "wb").write(strip_wav(r.content))
-            # resample to 48k, drop all metadata
-            subprocess.run([FF, "-y", "-loglevel", "error", "-i", tmp, "-map_metadata", "-1",
-                            "-fflags", "+bitexact", "-ar", str(SR), "-ac", "1", out], check=True)
-            os.remove(tmp)
-            return
+            return _to_wav(tmp, out)  # resample to 48k, drop all metadata
         print("TTS retry", attempt, r.status_code, r.text[:300], file=sys.stderr)
         if r.status_code in (400, 401, 403):  # bad key / bad request / no balance: retrying will not help
             break
@@ -347,6 +412,8 @@ def srt_time(s):
 # so they must be written out as speakable Chinese: "AB等于五", "三的平方", "二点五", "六十分之七t".
 TTS_BAD = re.compile(r"[0-9=+\-−×÷*/^_√∠△∥⊥°%²³<>≤≥≠≈∽≌∈∉⊂∪∩∞π±·•→⇒∴∵|{}\[\]()（）]")
 LOWER_RUN = re.compile(r"[a-z]{2,}")  # sin, cos, log, max ... TTS spells or mangles them
+CLAUSE_SPLIT = re.compile(r"[，。、；：！？,.!?:;…—]+")
+MAX_CLAUSE = 18  # longer runs without punctuation: GLM-TTS picks its own break, often mid-word
 
 
 def vis_width(s):
@@ -384,6 +451,10 @@ def lint_script(script):
             bad = sorted(set(TTS_BAD.findall(spoken)))
             if bad:
                 errors.append(f"{where} tts text has {' '.join(bad)} -> write it as spoken Chinese in 'tts': {spoken}")
+            for cl in CLAUSE_SPLIT.split(spoken):
+                if len(re.sub(r"\s", "", cl)) > MAX_CLAUSE:
+                    warns.append(f"{where} clause without punctuation > {MAX_CLAUSE} chars, TTS may break it anywhere: "
+                                 f"add a comma where you would breathe: {cl}")
             low = LOWER_RUN.findall(spoken)
             if low:
                 warns.append(f"{where} tts has latin words {low}: say them in Chinese (sin -> 正弦) or check by ear")
@@ -442,7 +513,7 @@ def load_script():
     for si, sc in enumerate(script):
         for li, ln in enumerate(sc["lines"]):
             src = ln.get("tts", ln["zh"])
-            text, notes = pron.to_tts(src)
+            text, notes = pron.to_tts(src, LETTER_SEP)
             issues = pron.lint(src)
             ln["zh"] = pron.strip(ln["zh"])  # subtitles never show the markup
             ln["tts_text"] = text
@@ -458,10 +529,19 @@ def load_script():
 
 
 def need_key():
+    if ENGINE == "edge" and not _has_edge():
+        raise SystemExit("TTS_ENGINE=edge but edge-tts is not installed: ask the user, then `PY -m pip install --user edge-tts`")
+    if ENGINE == "say" and not shutil.which("say"):
+        raise SystemExit("TTS_ENGINE=say needs macOS (`say` not found). Use glm or edge.")
+    if ENGINE != "glm":
+        print(f"note: TTS engine = {ENGINE} ({VOICE}), fallback quality; GLM-TTS (GLM_API_KEY) sounds better "
+              "and enables --asr.", file=sys.stderr)
+        return
     if not ENV.get("GLM_API_KEY"):
         raise SystemExit("GLM_API_KEY is missing. Ask the user to put `GLM_API_KEY=...` in ~/.config/math-problem-video/.env "
                          "(works in every directory) or in the workspace-root .env "
-                         "(key from https://bigmodel.cn/usercenter/proj-mgmt/apikeys). Never invent or print a key.")
+                         "(key from https://bigmodel.cn/usercenter/proj-mgmt/apikeys). Never invent or print a key. "
+                         "Without a key: TTS_ENGINE=edge (pip install edge-tts) or TTS_ENGINE=say (macOS).")
     if VOICE not in VOICES:
         print(f"note: GLM_VOICE={VOICE!r} is not a system voice {VOICES}; OK only if it is a cloned voice id.", file=sys.stderr)
 
@@ -469,7 +549,7 @@ def need_key():
 def main():
     if "--say" in sys.argv:
         src = sys.argv[sys.argv.index("--say") + 1]
-        text, notes = pron.to_tts(src)
+        text, notes = pron.to_tts(src, LETTER_SEP)
         for o, r, x in notes:
             print(f"固定  {o} -> {r}  (送给TTS: {x})")
         for c, k, g, rs, ctx in pron.lint(src):
@@ -479,11 +559,17 @@ def main():
         tts(text, out)
         print("voice:", VOICE, " sent to TTS:", text)
         print("WROTE", out)
-        print("ASR heard:", asr(out))
+        if ENV.get("GLM_API_KEY"):
+            print("ASR heard:", asr(out))
         return
 
     if "--asr" in sys.argv:
-        need_key()
+        if not ENV.get("GLM_API_KEY"):  # recognition is GLM-ASR only; clips from any engine can be checked with a key
+            print("ASR SKIPPED: no GLM_API_KEY. Tell the user the letter readings were not machine-checked "
+                  "and list the lines with point names (AB, PAD ...) for them to listen to.")
+            raise SystemExit(0)
+        if ENGINE == "glm":
+            need_key()
         script, _, _, _ = load_script()
         rows, bad = [], 0
         for sc in script:

@@ -34,7 +34,7 @@ anim.js + engine.js ◄───────────────────
 2. **先讲清楚题目。** 视频第一幕必须展示原题图片（截图或 `make_problem_png.py` 生成的图），旁白逐条读条件，每读一条就在图上框出那一条。
 3. **`tts` 字段只能是能念出来的中文。** 不能有阿拉伯数字、`= + − × ÷ / ^ √ ∠ △ ∥ ° ( )` 等符号：`AC=3` 写成 `AC等于三`，`x²` 写成 `x的平方`。字幕 `zh` 字段保留正常数学写法。`--check` 会报错拦住。
 4. **读音必须固定。** 调 TTS 之前 `--check` 必须显示 `未固定读音的生僻字/多音字: 0` 且 `script errors: 0`。多音字的标注写在该字**后面**：`长[cháng]`、`要[yào]求`。**不能**写成 `中点[zhōng]`（那会把"点"读成 zhōng）。
-5. **API Key 只能由用户提供。** 缺 `GLM_API_KEY` 就停下来请用户配置（见 [reference/glm-tts-setup.md](reference/glm-tts-setup.md)）。不要编造 key、模型名或接口地址，不要把 key 打印出来或写进项目文件夹。
+5. **API Key 只能由用户提供。** 缺 `GLM_API_KEY` 时先问用户：配置 key（音质最好，推荐），还是用兜底引擎（edge-tts / macOS `say`，见 [reference/glm-tts-setup.md](reference/glm-tts-setup.md#没有-glm-key-时兜底引擎)）。不要编造 key、模型名或接口地址，不要把 key 打印出来或写进项目文件夹。
 6. **所有画面内容在 y ≤ 860 以内**（y≈914~1044 是字幕框）。图形放左半边 x 60~900，推导文字写在右边的横线板 `board()` 上。
 7. **先写分镜，再写动画。** `storyboard.md` 给每句旁白规划"指/动/留"，按 [reference/visual-design.md](reference/visual-design.md) 的动作表选动作；`node render.mjs motion` 必须通过。
 8. **先预览再花钱。** 用 `--preview` + `stills auto` 检查版面，没问题再跑真正的 TTS。
@@ -56,14 +56,15 @@ bash SKILL/scripts/setup_check.sh WS/<ascii_folder_name>
 ```
 - `new_video.sh` 会把 `pron.py`/`pron.json` 链接到技能自带的共享词表，并在找得到时把 `node_modules` 链接到已有安装（不复制）；找不到才需要在 `WS` 下 `npm install`。python 包用 `PY -m pip install --user numpy requests pypinyin pillow`。
 - `new_video.sh` 报 `ERROR: ... is where the skill is installed` 说明你把 WS 设成了技能所在的项目，改用当前目录。
-- 缺 `GLM_API_KEY`：**停下，按 [reference/glm-tts-setup.md](reference/glm-tts-setup.md) 引导用户**配置（推荐放 `~/.config/math-problem-video/.env`，所有目录通用），然后继续。**不要去别的项目里找 `.env` 用，也不要因此换工作目录。**
+- 默认音色是 `chuichui`（锤锤），用户可以在 `.env` 里用 `GLM_VOICE` 换。
+- 缺 `GLM_API_KEY`：**停下，按 [reference/glm-tts-setup.md](reference/glm-tts-setup.md) 引导用户**配置（推荐放 `~/.config/math-problem-video/.env`，所有目录通用），然后继续。**不要去别的项目里找 `.env` 用，也不要因此换工作目录。** 用户没有 key 或不想配：`TTS_ENGINE=auto`（默认）会自动改用兜底引擎，`setup_check.sh` 会显示用的是哪个；装 edge-tts 前先征得用户同意。
 - **通过标准：** `setup_check.sh` 输出 `ALL OK`。
 
 ### 第 3 步：测试 TTS（验证 key 和音色）
 ```bash
 cd PROJ && PY build_audio.py --say "你好，我们来看一道数学题。"
 ```
-- 成功会打印 `WROTE build/say_xxxx.wav`。401/403 = key 错或没余额，告诉用户，不要重试 10 次。
+- 成功会打印 `WROTE build/say_xxxx.wav` 和 `voice: ...`（`edge:` / `say:` 开头 = 兜底引擎）。401/403 = key 错或没余额，告诉用户，不要重试 10 次。
 - 第一次给这个用户做视频时，把这个 wav 路径告诉用户试听，确认音色（音色表见 glm-tts-setup.md）。
 - **通过标准：** 生成了 wav。
 
@@ -122,7 +123,7 @@ cd PROJ && PY build_audio.py && PY build_audio.py --asr && node render.mjs still
 - TTS 按文本缓存在 `build/tts/`，改了某句只会重新合成那一句。
 - `--asr` 用智谱语音识别把每句配音转回文字，写入 `build/asr_report.txt`（结果有缓存）。**字母序列对不上的句子标 ✗，退出码 1**：修改那句（见 pronunciation.md 的"字母"一节）后重跑这两条命令。报告里的汉字也要扫一遍，发现明显读错的字（不是同音字，也不是 ASR 把"三"写成"3"这种）就按第 7 步处理。
 - 真实时长与预览不同，重新看一遍 sheet。
-- **通过标准：** 打印 `mix + srt written`；`--asr` 显示 `字母读错的句子: 0`；截图检查通过。
+- **通过标准：** 打印 `mix + srt written`；`--asr` 显示 `字母读错的句子: 0`（没有 GLM key 时显示 `ASR SKIPPED`：交付时告诉用户字母读音没有机器核对，列出含点名的句子请用户重点听）；截图检查通过。
 
 ### 第 11 步：渲染视频并交付
 ```bash
@@ -146,6 +147,8 @@ cd PROJ && node render.mjs video 6      # 6 = 并行浏览器页数（不是帧�
 | 渲染完不看画面就交付 | 每次都看 `build/sheet.png` |
 | tts 里手动写 `C、O` 或 `C,O` 来分开字母 | 不用管：pron.py 自动把相邻字母拆成 `C O`（实测逗号、顿号会多出停顿） |
 | `--check` 还有 ⚠ 就调 TTS | 修到 0；否则会花钱合成出错误读音 |
+| 为了"保险"把常见词都加进 `pron.json` 或行内标注 | 只标会读错的字；替换成同音字会破坏断句（`直搅三搅形`），`pron.py` 已经只在上下文会读错时才替换 |
+| 一个分句二十多个字不加标点 | 在换气处加逗号，分句 ≤ 18 字（`--check` 会 warn），否则 TTS 自己在词中间停 |
 | 题目图片里 `x²` 显示成 `x☒` 却没发现 | 审查时放大看文字；make_problem_png.py 已自动换字体 |
 | 用编辑工具改 JSON 后出现弯引号 `“`，解析失败 | JSON 语法引号必须是英文 `"`；见 troubleshooting.md |
 | 图一次画好，之后每句只多一条线/一个标签，解释全在板子上 | 每句都有"指→动→留"；相等就滑过去重合，立体↔俯视用 `camTween`；`render.mjs motion` 必须通过 |

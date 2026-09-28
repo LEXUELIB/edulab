@@ -10,7 +10,7 @@
 | 认证 | Header `Authorization: Bearer <GLM_API_KEY>` |
 | model | `glm-tts`（唯一可选值） |
 | input | 要读的文本，**最长 1024 字符** |
-| voice | `tongtong`（彤彤，默认）、`chuichui`（锤锤）、`xiaochen`（小陈）、`jam`、`kazi`、`douji`、`luodo`（动动动物圈系列）；也可以是用户的复刻音色 id |
+| voice | `chuichui`（锤锤，默认）、`tongtong`（彤彤）、`xiaochen`（小陈）、`jam`、`kazi`、`douji`、`luodo`（动动动物圈系列）；也可以是用户的复刻音色 id |
 | speed | 0.5 ~ 2，默认 1.0；本流水线用 1.05（`GLM_SPEED` 可改） |
 | response_format | `wav`（返回 24kHz，代码会转成 48kHz 并去掉元数据） |
 | watermark_enabled | `false`（只有用户在控制台开通了"去水印"才生效，否则仍带水印，不影响使用） |
@@ -30,12 +30,12 @@
 >    mkdir -p ~/.config/math-problem-video
 >    cat >> ~/.config/math-problem-video/.env <<'EOF'
 >    GLM_API_KEY=你复制的key
->    GLM_VOICE=tongtong
+>    GLM_VOICE=chuichui
 >    EOF
 >    chmod 600 ~/.config/math-problem-video/.env
 >    ```
 >    （也可以只给某个工作目录配置：写进 `<WS>/.env`。）
->    `GLM_VOICE` 可选：tongtong（女声，默认）、xiaochen（男声）、chuichui 等。
+>    `GLM_VOICE` 可选：chuichui（锤锤，默认）、tongtong（彤彤，女声）、xiaochen（小陈，男声）等。
 > 5. （可选）不想要 AI 水印：控制台右上角 个人中心 → 安全管理 → 去水印管理 → 打开开关。
 >
 > 配好告诉我，我先合成一句测试音给你听。
@@ -65,6 +65,22 @@ cd PROJ && PY build_audio.py --say "你好，我们来看一道数学题。"
 | `TTS failed (400)` | 文本超长或参数错误；voice 名写错 | 检查 tts 文本长度（<1024）、`GLM_VOICE` 拼写 |
 | `TTS failed (429)` / 连续超时 | 并发或频率限制 | 等一会重跑（已合成的句子有缓存，不会重复计费） |
 | 读音不对 | TTS 自己猜读音 | 见 pronunciation.md，改完只重合成那一句 |
+
+## 没有 GLM key 时：兜底引擎
+
+`build_audio.py` 用 `TTS_ENGINE` 选择配音引擎（写在 `.env` 或环境变量里），默认 `auto`：有 `GLM_API_KEY` 用 GLM，否则装了 edge-tts 用 edge，否则在 macOS 上用 `say`。
+
+| 引擎 | 需要什么 | 音质 | 音色变量（默认） |
+|---|---|---|---|
+| `glm` | `GLM_API_KEY`（付费） | 最好，唯一支持 `--asr` 核对 | `GLM_VOICE`（chuichui） |
+| `edge` | `PY -m pip install --user edge-tts`，联网；免费、无需 key（微软 Edge 朗读接口，非官方，可能失效） | 接近 GLM | `EDGE_VOICE`（zh-CN-XiaoxiaoNeural；男声 zh-CN-YunxiNeural） |
+| `say` | macOS 自带，离线，什么都不用装 | 机械感明显，只适合预览/内部用 | `SAY_VOICE`（Tingting，其他中文音色读不了字母） |
+
+- **装 edge-tts 前先问用户。**
+- 语速都跟 `GLM_SPEED` 走。缓存按引擎+音色分开，换引擎会重新合成。
+- 字母：GLM/edge 用空格分开（`P A B`）；`say` 的 Tingting 会吞掉空格分开的字母，所以 `say` 引擎自动改用顿号（`P、A、B`，ASR 实测逐个读对，代价是字母间有小停顿）。
+- 没有 GLM key 时 `--asr` 会跳过（`ASR SKIPPED`）：交付时告诉用户字母读音没有机器核对。
+- 用了兜底引擎，交付时要告诉用户用的是哪个引擎，以及配置 GLM key 后重跑第 10、11 步即可换成 GLM 配音。
 
 ## 换音色 / 语速
 
